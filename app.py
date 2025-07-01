@@ -1,22 +1,10 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Query
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.requests import Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from typing import Optional, List, Union
 import os
-import uuid
-import asyncio
-from datetime import datetime
-from supabase import create_client, Client
-import mimetypes
-from pathlib import Path
-from dotenv import load_dotenv
 import logging
-
-# Load environment variables
-load_dotenv()
+from supabase import create_client, Client
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,146 +13,184 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(title="Image Management System", version="1.0.0")
 
-# Create directories if they don't exist
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
-
-# Static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
-# Supabase configuration with environment variables
+# Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://gbkhkbfbarsnpbdkxzii.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI")
 
-logger.info(f"Supabase URL: {SUPABASE_URL}")
-logger.info(f"Supabase Key: {SUPABASE_KEY[:20]}...")
+logger.info(f"Starting app with Supabase URL: {SUPABASE_URL}")
 
 def get_supabase_client() -> Client:
-    try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:
-        logger.error(f"Failed to create Supabase client: {e}")
-        raise HTTPException(status_code=500, detail="Database connection failed")
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Pydantic models with flexible ID handling
+# Models
 class EstiloResponse(BaseModel):
-    id: Union[str, int]  # Handle both strings and integers
+    id: str
     nombre: str
-    
-    @field_validator('id')
-    @classmethod
-    def convert_id_to_string(cls, v):
-        return str(v)
 
-class ColorResponse(BaseModel):
-    id: Union[str, int]  # Handle both strings and integers
-    color: str
-    count: int
-    terex1: str
-    
-    @field_validator('id')
-    @classmethod
-    def convert_id_to_string(cls, v):
-        return str(v)
-
-class ImageUploadResponse(BaseModel):
-    id: Union[str, int]  # Handle both strings and integers
-    estilo_id: Union[str, int]  # Handle both strings and integers
-    color_id: Union[str, int]  # Handle both strings and integers
-    file_name: str
-    file_path: str
-    public_url: str
-    description: Optional[str]
-    content_type: str
-    file_size: int
-    created_at: str
-    
-    @field_validator('id', 'estilo_id', 'color_id')
-    @classmethod
-    def convert_ids_to_string(cls, v):
-        return str(v)
-
-# Utility functions
-def ceroadd_estilo(estilo_id: Union[str, int]) -> str:
-    """Add leading zeros to estilo ID"""
+@app.get("/")
+async def root():
+    """Root endpoint that also serves as health check"""
     try:
-        num = int(estilo_id) if isinstance(estilo_id, str) else estilo_id
-        if num < 10:
-            return f"0000{num}"
-        elif num < 100:
-            return f"000{num}"
-        else:
-            return f"00{num}"
-    except (ValueError, TypeError):
-        return str(estilo_id)
-
-def ceroadd_color(color_id: Union[str, int]) -> str:
-    """Add leading zeros to color ID"""
-    try:
-        num = int(color_id) if isinstance(color_id, str) else color_id
-        if num < 10:
-            return f"00{num}"
-        elif num < 100:
-            return f"0{num}"
-        else:
-            return str(num)
-    except (ValueError, TypeError):
-        return str(color_id)
-
-# API Routes
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for Railway"""
-    try:
+        logger.info("Root endpoint called")
+        
         # Test database connection
         supabase = get_supabase_client()
-        # Simple query to test connection
         response = supabase.table('inventario_estilos').select('id').limit(1).execute()
-        return {"status": "healthy", "database": "connected"}
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    """Main page - Style and Color selection"""
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        logger.error(f"Error serving main page: {e}")
-        # Return a simple HTML response if template fails
-        return HTMLResponse(content="""
+        
+        html_content = """
         <!DOCTYPE html>
-        <html>
-        <head><title>Image Management System</title></head>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Image Management System</title>
+            <style>
+                body { 
+                    font-family: Arial, sans-serif; 
+                    margin: 40px; 
+                    background: #f5f5f5; 
+                }
+                .container { 
+                    max-width: 800px; 
+                    margin: 0 auto; 
+                    background: white; 
+                    padding: 40px; 
+                    border-radius: 10px; 
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }
+                .status { 
+                    padding: 20px; 
+                    border-radius: 8px; 
+                    margin: 20px 0; 
+                }
+                .success { 
+                    background: #d4edda; 
+                    border: 1px solid #c3e6cb; 
+                    color: #155724; 
+                }
+                .loading { 
+                    background: #fff3cd; 
+                    border: 1px solid #ffeaa7; 
+                    color: #856404; 
+                }
+                button {
+                    background: #007bff;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    margin: 10px 5px;
+                }
+                button:hover { background: #0056b3; }
+                pre { 
+                    background: #f8f9fa; 
+                    padding: 15px; 
+                    border-radius: 5px; 
+                    overflow-x: auto; 
+                    max-height: 300px;
+                }
+            </style>
+        </head>
         <body>
-            <h1>Image Management System</h1>
-            <p>Loading...</p>
+            <div class="container">
+                <h1>🎯 Image Management System</h1>
+                <div id="status" class="status loading">
+                    ✅ System is running! Database connection successful.
+                </div>
+                
+                <h2>API Endpoints:</h2>
+                <button onclick="testEstilos()">Test /api/estilos</button>
+                <button onclick="testHealth()">Test /health</button>
+                <button onclick="testColors()">Test /api/colores/136</button>
+                
+                <div id="results"></div>
+            </div>
+            
             <script>
-                // Try to load estilos
-                fetch('/api/estilos')
-                    .then(response => response.json())
-                    .then(data => {
-                        document.body.innerHTML = '<h1>System Working!</h1><pre>' + JSON.stringify(data, null, 2) + '</pre>';
-                    })
-                    .catch(error => {
-                        document.body.innerHTML = '<h1>Error:</h1><pre>' + error + '</pre>';
-                    });
+                async function testEstilos() {
+                    try {
+                        const response = await fetch('/api/estilos');
+                        const data = await response.json();
+                        document.getElementById('results').innerHTML = 
+                            '<h3>✅ Estilos API Works!</h3><pre>' + 
+                            JSON.stringify(data.slice(0, 5), null, 2) + '</pre>';
+                    } catch (error) {
+                        document.getElementById('results').innerHTML = 
+                            '<h3 style="color: red">❌ Estilos API Error</h3><pre>' + error + '</pre>';
+                    }
+                }
+                
+                async function testHealth() {
+                    try {
+                        const response = await fetch('/health');
+                        const data = await response.json();
+                        document.getElementById('results').innerHTML = 
+                            '<h3>✅ Health Check Works!</h3><pre>' + 
+                            JSON.stringify(data, null, 2) + '</pre>';
+                    } catch (error) {
+                        document.getElementById('results').innerHTML = 
+                            '<h3 style="color: red">❌ Health Check Error</h3><pre>' + error + '</pre>';
+                    }
+                }
+                
+                async function testColors() {
+                    try {
+                        const response = await fetch('/api/colores/136');
+                        const data = await response.json();
+                        document.getElementById('results').innerHTML = 
+                            '<h3>✅ Colors API Works!</h3><pre>' + 
+                            JSON.stringify(data.slice(0, 3), null, 2) + '</pre>';
+                    } catch (error) {
+                        document.getElementById('results').innerHTML = 
+                            '<h3 style="color: red">❌ Colors API Error</h3><pre>' + error + '</pre>';
+                    }
+                }
             </script>
         </body>
         </html>
-        """, status_code=200)
+        """
+        
+        return HTMLResponse(content=html_content)
+        
+    except Exception as e:
+        logger.error(f"Root endpoint error: {e}")
+        error_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Error</title></head>
+        <body>
+            <h1>❌ System Error</h1>
+            <p>Error: {str(e)}</p>
+            <p>Check logs for details.</p>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=error_html, status_code=500)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        logger.info("Health check called")
+        supabase = get_supabase_client()
+        response = supabase.table('inventario_estilos').select('id').limit(1).execute()
+        return {"status": "healthy", "database": "connected", "records": len(response.data)}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "error": str(e)}
+        )
 
 @app.get("/api/estilos", response_model=List[EstiloResponse])
-async def get_estilos(search: Optional[str] = Query(None)):
-    """Get estilos with prioridad=1, optionally filtered by search term"""
+async def get_estilos(search: Optional[str] = None):
+    """Get estilos with prioridad=1"""
     try:
+        logger.info(f"Getting estilos, search: {search}")
         supabase = get_supabase_client()
         
         query = supabase.table('inventario_estilos').select('id, nombre').eq('prioridad', 1).order('nombre')
-        
         response = query.execute()
         estilos = response.data
         
@@ -178,7 +204,7 @@ async def get_estilos(search: Optional[str] = Query(None)):
                 if search_lower in estilo['nombre'].lower() or search in str(estilo['id'])
             ]
         
-        # Convert IDs to strings for consistent handling
+        # Convert IDs to strings
         for estilo in estilos:
             estilo['id'] = str(estilo['id'])
         
@@ -187,13 +213,14 @@ async def get_estilos(search: Optional[str] = Query(None)):
         logger.error(f"Error fetching estilos: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching estilos: {str(e)}")
 
-@app.get("/api/colores/{estilo_id}", response_model=List[ColorResponse])
-async def get_colores(estilo_id: Union[str, int], search: Optional[str] = Query(None)):
-    """Get colors available for a specific estilo with positive terex1 values"""
-    supabase = get_supabase_client()
-    
+@app.get("/api/colores/{estilo_id}")
+async def get_colores(estilo_id: Union[str, int], search: Optional[str] = None):
+    """Get colors for an estilo"""
     try:
-        # Get inventory items for the specific estilo with terex1 > 0
+        logger.info(f"Getting colors for estilo: {estilo_id}, search: {search}")
+        supabase = get_supabase_client()
+        
+        # Get inventory items
         inventario_query = supabase.table('inventario1').select('color_id, terex1').eq('estilo_id', estilo_id).gt('terex1', 0)
         inventario_response = inventario_query.execute()
         
@@ -203,14 +230,11 @@ async def get_colores(estilo_id: Union[str, int], search: Optional[str] = Query(
         # Get unique color_ids and calculate stats
         color_stats = {}
         for item in inventario_response.data:
-            color_id = str(item['color_id'])  # Convert to string for consistent handling
+            color_id = str(item['color_id'])
             terex1 = item['terex1'] or 0
             
             if color_id not in color_stats:
-                color_stats[color_id] = {
-                    'count': 1,
-                    'terex1_total': terex1,
-                }
+                color_stats[color_id] = {'count': 1, 'terex1_total': terex1}
             else:
                 color_stats[color_id]['count'] += 1
                 color_stats[color_id]['terex1_total'] += terex1
@@ -223,11 +247,11 @@ async def get_colores(estilo_id: Union[str, int], search: Optional[str] = Query(
         colors_query = supabase.table('inventario_colores').select('id, color').in_('id', color_ids)
         colors_response = colors_query.execute()
         
-        # Build final response
+        # Build response
         colors_list = []
         for color in colors_response.data:
-            color_id = str(color['id'])  # Convert to string for consistent handling
-            if color_id in color_stats:  # Make sure we have stats for this color
+            color_id = str(color['id'])
+            if color_id in color_stats:
                 stats = color_stats[color_id]
                 avg_terex1 = stats['terex1_total'] / stats['count']
                 
@@ -241,7 +265,7 @@ async def get_colores(estilo_id: Union[str, int], search: Optional[str] = Query(
         # Sort by color name
         colors_list.sort(key=lambda x: x['color'])
         
-        # Apply search filter if provided
+        # Apply search filter
         if search:
             search_lower = search.lower()
             colors_list = [
@@ -249,164 +273,15 @@ async def get_colores(estilo_id: Union[str, int], search: Optional[str] = Query(
                 if search_lower in color['color'].lower() or search in str(color['id'])
             ]
         
+        logger.info(f"Found {len(colors_list)} colors")
         return colors_list
+        
     except Exception as e:
+        logger.error(f"Error fetching colors: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching colors: {str(e)}")
-
-@app.get("/upload/{estilo_id}/{color_id}", response_class=HTMLResponse)
-async def upload_page(request: Request, estilo_id: Union[str, int], color_id: Union[str, int]):
-    """Image upload page"""
-    supabase = get_supabase_client()
-    
-    try:
-        # Get estilo and color details
-        estilo_response = supabase.table('inventario_estilos').select('nombre').eq('id', estilo_id).single().execute()
-        color_response = supabase.table('inventario_colores').select('color').eq('id', color_id).single().execute()
-        
-        context = {
-            "request": request,
-            "estilo_id": str(estilo_id),
-            "color_id": str(color_id),
-            "estilo_nombre": estilo_response.data['nombre'],
-            "color_nombre": color_response.data['color']
-        }
-        
-        return templates.TemplateResponse("upload.html", context)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading upload page: {str(e)}")
-
-@app.post("/api/upload", response_model=dict)
-async def upload_image(
-    estilo_id: Union[str, int] = Form(...),
-    color_id: Union[str, int] = Form(...),
-    description: Optional[str] = Form(""),
-    file: UploadFile = File(...)
-):
-    """Upload an image file"""
-    supabase = get_supabase_client()
-    
-    try:
-        # Convert IDs to strings for consistent handling
-        estilo_id = str(estilo_id)
-        color_id = str(color_id)
-        
-        # Validate file type
-        if not file.content_type or not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="File must be an image")
-        
-        # Read file content
-        file_content = await file.read()
-        file_size = len(file_content)
-        
-        # Generate unique filename
-        timestamp = int(datetime.now().timestamp() * 1000)
-        file_extension = Path(file.filename).suffix.lower()
-        if not file_extension:
-            file_extension = '.jpg'  # default extension
-        
-        filename = f"image_{timestamp}{file_extension}"
-        file_path = f"estilo_{estilo_id}/color_{color_id}/{filename}"
-        
-        # Upload to Supabase Storage
-        storage_response = supabase.storage.from_('image-fundas').upload(
-            path=file_path,
-            file=file_content,
-            file_options={"cache-control": "3600", "upsert": False}
-        )
-        
-        if storage_response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Failed to upload file to storage")
-        
-        # Get public URL
-        public_url = supabase.storage.from_('image-fundas').get_public_url(file_path)
-        
-        # Save record to database
-        db_response = supabase.table('image_uploads').insert({
-            'estilo_id': estilo_id,
-            'color_id': color_id,
-            'file_name': file.filename,
-            'file_path': file_path,
-            'public_url': public_url,
-            'description': description.strip() if description else None,
-            'content_type': file.content_type,
-            'file_size': file_size,
-        }).execute()
-        
-        return {
-            "success": True,
-            "message": "Image uploaded successfully",
-            "data": db_response.data[0]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error uploading image: {str(e)}")
-
-@app.get("/api/images/{estilo_id}/{color_id}", response_model=List[ImageUploadResponse])
-async def get_images(estilo_id: Union[str, int], color_id: Union[str, int]):
-    """Get existing images for a specific estilo and color combination"""
-    supabase = get_supabase_client()
-    
-    try:
-        # Convert IDs to strings for consistent handling
-        estilo_id = str(estilo_id)
-        color_id = str(color_id)
-        
-        response = supabase.table('image_uploads').select('*').eq('estilo_id', estilo_id).eq('color_id', color_id).order('created_at', desc=True).execute()
-        
-        # Convert all IDs to strings for consistent handling
-        for image in response.data:
-            image['id'] = str(image['id'])
-            image['estilo_id'] = str(image['estilo_id'])
-            image['color_id'] = str(image['color_id'])
-        
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching images: {str(e)}")
-
-@app.delete("/api/images/{image_id}")
-async def delete_image(image_id: Union[str, int]):
-    """Delete an image and its record"""
-    supabase = get_supabase_client()
-    
-    try:
-        # Convert ID to string for consistent handling
-        image_id = str(image_id)
-        
-        # Get image record first
-        image_response = supabase.table('image_uploads').select('*').eq('id', image_id).single().execute()
-        
-        if not image_response.data:
-            raise HTTPException(status_code=404, detail="Image not found")
-        
-        image_data = image_response.data
-        file_path = image_data['file_path']
-        
-        # Delete from storage
-        storage_response = supabase.storage.from_('image-fundas').remove([file_path])
-        
-        # Delete from database
-        db_response = supabase.table('image_uploads').delete().eq('id', image_id).execute()
-        
-        return {
-            "success": True,
-            "message": "Image deleted successfully"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting image: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # Get port from environment (Railway sets this)
     port = int(os.environ.get("PORT", 8000))
-    
     logger.info(f"Starting server on port {port}")
-    
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=port,
-        log_level="info",
-        access_log=True
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
