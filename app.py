@@ -12,20 +12,40 @@ from datetime import datetime
 from supabase import create_client, Client
 import mimetypes
 from pathlib import Path
+from dotenv import load_dotenv
+import logging
+
+# Load environment variables
+load_dotenv()
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(title="Image Management System", version="1.0.0")
+
+# Create directories if they don't exist
+os.makedirs("static", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
 
 # Static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Supabase configuration
-SUPABASE_URL = "https://gbkhkbfbarsnpbdkxzii.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI"
+# Supabase configuration with environment variables
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://gbkhkbfbarsnpbdkxzii.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdia2hrYmZiYXJzbnBiZGt4emlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQzODAzNzMsImV4cCI6MjA0OTk1NjM3M30.mcOcC2GVEu_wD3xNBzSCC3MwDck3CIdmz4D8adU-bpI")
+
+logger.info(f"Supabase URL: {SUPABASE_URL}")
+logger.info(f"Supabase Key: {SUPABASE_KEY[:20]}...")
 
 def get_supabase_client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        logger.error(f"Failed to create Supabase client: {e}")
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
 # Pydantic models with flexible ID handling
 class EstiloResponse(BaseModel):
@@ -94,21 +114,61 @@ def ceroadd_color(color_id: Union[str, int]) -> str:
 
 # API Routes
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Railway"""
+    try:
+        # Test database connection
+        supabase = get_supabase_client()
+        # Simple query to test connection
+        response = supabase.table('inventario_estilos').select('id').limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     """Main page - Style and Color selection"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    try:
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception as e:
+        logger.error(f"Error serving main page: {e}")
+        # Return a simple HTML response if template fails
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Image Management System</title></head>
+        <body>
+            <h1>Image Management System</h1>
+            <p>Loading...</p>
+            <script>
+                // Try to load estilos
+                fetch('/api/estilos')
+                    .then(response => response.json())
+                    .then(data => {
+                        document.body.innerHTML = '<h1>System Working!</h1><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                    })
+                    .catch(error => {
+                        document.body.innerHTML = '<h1>Error:</h1><pre>' + error + '</pre>';
+                    });
+            </script>
+        </body>
+        </html>
+        """, status_code=200)
 
 @app.get("/api/estilos", response_model=List[EstiloResponse])
 async def get_estilos(search: Optional[str] = Query(None)):
     """Get estilos with prioridad=1, optionally filtered by search term"""
-    supabase = get_supabase_client()
-    
     try:
+        supabase = get_supabase_client()
+        
         query = supabase.table('inventario_estilos').select('id, nombre').eq('prioridad', 1).order('nombre')
         
         response = query.execute()
         estilos = response.data
+        
+        logger.info(f"Found {len(estilos)} estilos")
         
         # Apply search filter if provided
         if search:
@@ -124,6 +184,7 @@ async def get_estilos(search: Optional[str] = Query(None)):
         
         return estilos
     except Exception as e:
+        logger.error(f"Error fetching estilos: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching estilos: {str(e)}")
 
 @app.get("/api/colores/{estilo_id}", response_model=List[ColorResponse])
@@ -336,5 +397,16 @@ async def delete_image(image_id: Union[str, int]):
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # Get port from environment (Railway sets this)
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    
+    logger.info(f"Starting server on port {port}")
+    
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        log_level="info",
+        access_log=True
+    )
